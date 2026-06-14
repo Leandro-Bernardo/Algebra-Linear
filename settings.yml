@@ -1,0 +1,6 @@
+sweep_id: null       # wandb created id sweep
+
+model:
+  max_epochs: 10             # maximum epochs
+  learning_rate_patience: 1 # reduce on plateau technique
+  loss_function: cross_entropy          # accepts only cross_entropy

@@ -3,3 +3,14 @@
 LinAlg
 *.ipynb
 dataset
+Final_dataset/
+
+wandb/run-20260614_143242-6yl6iw21/logs/
+
+*.log
+
+*.wandb
+checkpoints/
+wandb/
+lightning_logs/
+
