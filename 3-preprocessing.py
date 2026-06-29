@@ -25,7 +25,7 @@ cols_to_remove = [
     "Depth_min"
 ]
 
-cols_to_remove = [c for c in cols_to_remove if c in dataset_filtrado.column_names]
+cols_to_remove = [c for c in cols_to_remove if c in dataset.column_names]
 
 print(f"\nQuantidade de amostras por classe (antes da filtragem):\n"f"{df['original_label'].value_counts()}")
 
