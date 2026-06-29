@@ -42,7 +42,7 @@ class EmbeddingTaxonomico(nn.Module):
         # Modela de volta no formato da matriz 6 x 49
         # matriz_final = contextualizado.view(batch_size, 6, self.embedding_dim) # [Batch, 6, 49]
 
-        return embedded#matriz_final
+        return embedded #matriz_final
 
 
 class FeatureExtractor(nn.Module):
@@ -72,14 +72,45 @@ class Model(nn.Module):
         Returns: classe predita
 
     """
-    def __init__(self, num_classes_especie: int, num_total_nos_globais: int, embedding_dim: Optional[int] = 49):
+    def __init__(self, num_classes_especie: int, num_total_nos_globais: int, embedding_dim: Optional[int] = 49, use_taxonomic_embedding: bool = True):
         super().__init__()
         self.feature_extractor = FeatureExtractor()
-        self.embedding_taxonomico = EmbeddingTaxonomico(num_total_nos_globais, embedding_dim)
+        self.use_taxonomic_embedding = use_taxonomic_embedding
         self.reducao_canais = nn.Conv2d(in_channels=512, out_channels=1, kernel_size=1) # Projeta os 512 canais da VGG para 1 canal sem perder informação espacial
         self.pool_adaptativo = nn.AdaptiveAvgPool2d((7, 7)) # Força dimensão espacial 7x7 = 49
+
+        if self.use_taxonomic_embedding:
+            self.embedding_taxonomico = EmbeddingTaxonomico(num_total_nos_globais, embedding_dim)
+            input_dim = embedding_dim*6
+            # self.classificador = torch.nn.Sequential(
+            #                                    nn.Linear(in_features=input_dim, out_features=256),
+            #                                    nn.BatchNorm1d(256),
+            #                                    nn.ReLU(),
+            #                                    nn.Linear(in_features=256, out_features=128),
+            #                                    nn.BatchNorm1d(128),
+            #                                    nn.ReLU(),
+            #                                    nn.Linear(in_features=128, out_features=64),
+            #                                    nn.BatchNorm1d(64),
+            #                                    nn.ReLU(),
+            #                                    nn.Linear(in_features=64, out_features=32),
+            #                                    nn.BatchNorm1d(32),
+            #                                    nn.ReLU(),
+            #                                    nn.Linear(in_features=32, out_features=num_classes_especie),
+            #                                  )
+        else:
+            self.embedding_taxonomico = None
+            input_dim = embedding_dim
+            # self.classificador = torch.nn.Sequential(
+            #                                    nn.Linear(in_features=input_dim, out_features=32),
+            #                                    nn.BatchNorm1d(32),
+            #                                    nn.ReLU(),
+            #                                    nn.Linear(in_features=32, out_features=16),
+            #                                    nn.BatchNorm1d(16),
+            #                                    nn.ReLU(),
+            #                                    nn.Linear(in_features=16, out_features=num_classes_especie),
+            #                                  )
         self.classificador = torch.nn.Sequential(
-                                               nn.Linear(in_features=294, out_features=256),
+                                               nn.Linear(in_features=input_dim, out_features=256),
                                                nn.BatchNorm1d(256),
                                                nn.ReLU(),
                                                nn.Linear(in_features=256, out_features=128),
@@ -94,7 +125,7 @@ class Model(nn.Module):
                                                nn.Linear(in_features=32, out_features=num_classes_especie),
                                              )
 
-    def forward(self, images: torch.Tensor, IDs_taxonomicos: torch.Tensor):
+    def forward(self, images: torch.Tensor, ids_taxonomicos: Optional[torch.Tensor] = None):
         ## PROCESSAMENTO DA IMAGEM
         # Saída da VGG
         features  = self.feature_extractor(images) # [Batch, 512, H, W]
@@ -110,20 +141,39 @@ class Model(nn.Module):
         vetor_visual = vetor_visual.unsqueeze(1) # [Batch, 1, 49]
 
         ## PROCESSAMENTO DA TAXONOMIA
-        matriz_tax = self.embedding_taxonomico(IDs_taxonomicos) # [Batch, 6, 49]
-
+        if self.use_taxonomic_embedding:
+            if ids_taxonomicos is None:
+                raise ValueError("ids_taxonomicos deve ser informado quando use_taxonomic_embedding=True.")
+            matriz_tax = self.embedding_taxonomico(ids_taxonomicos)
         ## IMBUTE AS INFORMAÇÕES TAXONOMICAS APRENDIDAS COM AS INFORMAÇõES VISUAIS APRENDIDAS
         # Produto de Hadamard
-        features = vetor_visual*matriz_tax # [Batch, 6, 49]
+            features = vetor_visual * matriz_tax  # [Batch, 6, 49]
+        else:
+            features = vetor_visual  # [Batch, 1, 49]
+        # # Fluxo normal de treino/validação usando a árvore real e as imagens
+        # if ids_taxonomicos is not None:
+        #     matriz_tax = self.embedding_taxonomico(ids_taxonomicos)   # [Batch, 6, 49]
+        # # Fluxo de inferência (apenas imagem)
+        # else:
+        #     # Multiplicar pelo Produto de Hadamard manterá as características visuais puras reproduzidas por 6 vezes.
+        #     batch_size = images.size(0)
+        #     matriz_tax = torch.ones(batch_size, 6, 49, device=images.device, dtype=images.dtype)
+        ## IMBUTE AS INFORMAÇÕES TAXONOMICAS APRENDIDAS COM AS INFORMAÇõES VISUAIS APRENDIDAS
+        # Produto de Hadamard
+        #features = vetor_visual*matriz_tax # [Batch, 6, 49]
         # Faz um flattening para gerar um vetor de catacteristicas semanticas e hierárquicas, que será a entrada da rede classificadora
-        features_flattened = torch.flatten(features, 1) # [Batch, 294]
+
+        features_flattened = torch.flatten(features, 1) # [Batch, 294] ou [Batch, 49]
 
         ## SVD
-        # adiciona ruído infinitesimal apenas para que as matrizes nunca possuam posto degenerado puro
-        eps_svd = 1e-6 * torch.randn_like(features)
-        # Calcula SVD para a matriz de caracteristicas semanticas hierarquicas
-        # (torch.linalg.svdvals: ~supports batches of matrices, and if A is a batch of matrices then the output has the same batch dimensions~)
-        sigmas = torch.linalg.svdvals(features + eps_svd)
+        if self.use_taxonomic_embedding:
+            # adiciona ruído infinitesimal apenas para que as matrizes nunca possuam posto degenerado puro
+            eps_svd = 1e-6 * torch.randn_like(features)
+            # Calcula SVD para a matriz de caracteristicas semanticas hierarquicas
+            # (torch.linalg.svdvals: ~supports batches of matrices, and if A is a batch of matrices then the output has the same batch dimensions~)
+            sigmas = torch.linalg.svdvals(features + eps_svd)
+        else:
+            sigmas = None
 
         ## CLASSIFICAÇÃO FINAL
         # A rede usa as características extraídas para prever a Espécie

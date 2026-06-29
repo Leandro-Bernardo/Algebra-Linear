@@ -1,3 +1,12 @@
+# FIX PARA ERRO DE CERTIFICADO CORROMPIDO NO WINDOWS
+import ssl
+try:
+    import certifi
+    ssl.SSLContext.load_default_certs = lambda self, purpose=ssl.Purpose.SERVER_AUTH: self.load_verify_locations(certifi.where())
+except ImportError:
+    # Caso o pacote certifi não esteja visível, ignora a carga para não travar o import do aiohttp
+    ssl.SSLContext.load_default_certs = lambda self, purpose=ssl.Purpose.SERVER_AUTH: None
+
 import torch
 import wandb
 import json
@@ -19,6 +28,7 @@ BASE_DIR = os.getcwd()
 CHECKPOINT_SAVE_PATH = os.path.join(BASE_DIR, "checkpoints")
 MAX_EPOCHS = 100
 EARLY_STOP_PATIENCE = 10
+ID = None
 
 
 def train_iteration():
@@ -90,6 +100,7 @@ def main():
     yaml_path = os.path.join(BASE_DIR, "sweep_config.yml")
     with open(yaml_path, "r") as f:
         sweep_definition = yaml.load(f, Loader=yaml.FullLoader)
+    id = sweep_definition["sweep_id"]
     sweep_id = wandb.sweep(sweep_definition, project="Linear-Algebra")
     wandb.agent(sweep_id, function=train_iteration, count=10) # count=10 significa que ele testará 10 combinações diferentes do yaml antes de parar
 

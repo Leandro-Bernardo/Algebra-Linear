@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
+from typing import Optional
 
 class HierarchicalTaxonomicLoss(nn.Module):
-    def __init__(self, lambda_tax: float = 0.2, k: int = 6, eps: float = 1e-7):
+    def __init__(self, lambda_tax: float = 0.2, k: int = 6, eps: float = 1e-7, use_taxonomic_loss: Optional[bool] = True):
         """
         Args:
             lambda_tax: Peso do regularizador taxonómico (λ).
@@ -14,8 +15,9 @@ class HierarchicalTaxonomicLoss(nn.Module):
         self.lambda_tax = lambda_tax
         self.k = k
         self.eps = eps
+        self.use_taxonomic_loss = use_taxonomic_loss
 
-    def forward(self, saida_especie, classe_alvo, sigmas, codigos_taxonomicos):
+    def forward(self, saida_especie, classe_alvo, sigmas=None, codigos_taxonomicos=None):
         """
         Args:
             saida_especie: [Batch, num_classes] -> Saída linear do modelo.
@@ -26,38 +28,49 @@ class HierarchicalTaxonomicLoss(nn.Module):
         ## CLASSIFICAÇÃO TRADICIONAL
         l_ce = self.ce_loss(saida_especie, classe_alvo)
 
-        ## REGULARIZADOR TAXONÓMICO (Vetorizado na GPU)
-        # Expande os códigos taxonomicos para comparar todas as amostras contra todas (All-to-All)
-        codigos_i = codigos_taxonomicos.unsqueeze(1) # [Batch, 1, k]
-        codigos_j = codigos_taxonomicos.unsqueeze(0) # [1, Batch, k]
+        # Se a Loss Taxonômica estiver desativada, retorna apenas a Cross Entropy
+        if not self.use_taxonomic_loss:
+            l_tax = torch.zeros((), device=saida_especie.device, dtype=l_ce.dtype)
+            return l_ce, l_ce, l_tax
+        else:
+            if sigmas is None:
+                raise ValueError("sigmas deve ser informado quando use_taxonomic_loss=True.")
 
-        # Conta quantos níveis são idênticos entre a amostra i e j
-        niveis_iguais = (codigos_i == codigos_j).sum(dim=-1).float() # [Batch, Batch]
+            if codigos_taxonomicos is None:
+                raise ValueError("codigos_taxonomicos deve ser informado quando use_taxonomic_loss=True.")
 
-        # Distância taxonómica alvo: 1.0 se não partilharem nada, 0.0 se forem identidades
-        distancia_alvo = 1.0 - (niveis_iguais / self.k) # [Batch, Batch]
+            ## REGULARIZADOR TAXONÓMICO (Vetorizado na GPU)
+            # Expande os códigos taxonomicos para comparar todas as amostras contra todas (All-to-All)
+            codigos_i = codigos_taxonomicos.unsqueeze(1) # [Batch, 1, k]
+            codigos_j = codigos_taxonomicos.unsqueeze(0) # [1, Batch, k]
 
-        # CORREÇÃO DE ESTABILIDADE NUMÉRICA
-        sigmas_i = sigmas.unsqueeze(1) # [Batch, 1, k]
-        sigmas_j = sigmas.unsqueeze(0) # [1, Batch, k]
+            # Conta quantos níveis são idênticos entre a amostra i e j
+            niveis_iguais = (codigos_i == codigos_j).sum(dim=-1).float() # [Batch, Batch]
 
-        # Quadrado das diferenças
-        delta_ao_quadrado = torch.sum((sigmas_i - sigmas_j) ** 2, dim=-1)
+            # Distância taxonómica alvo: 1.0 se não partilharem nada, 0.0 se forem identidades
+            distancia_alvo = 1.0 - (niveis_iguais / self.k) # [Batch, Batch]
 
-        # Adiciona um fator de estabilidade EPS na raiz quadrada para evitar que o gradiente exploda para Infinito quando a distância entre sigmas for zero
-        distancia_predita = torch.sqrt(delta_ao_quadrado + self.eps) # [Batch, Batch]
+            # CORREÇÃO DE ESTABILIDADE NUMÉRICA
+            sigmas_i = sigmas.unsqueeze(1) # [Batch, 1, k]
+            sigmas_j = sigmas.unsqueeze(0) # [1, Batch, k]
 
-        # Cria uma máscara para ignorar a diagonal principal (comparação da imagem com ela mesma)
-        mascara = ~torch.eye(sigmas.size(0), dtype=torch.bool, device=sigmas.device)
+            # Quadrado das diferenças
+            delta_ao_quadrado = torch.sum((sigmas_i - sigmas_j) ** 2, dim=-1)
 
-        # Calcula o erro quadrático médio apenas nos pares válidos da matriz
-        erro_distancia = (distancia_predita - distancia_alvo) ** 2
-        l_tax = torch.mean(erro_distancia[mascara])
+            # Adiciona um fator de estabilidade EPS na raiz quadrada para evitar que o gradiente exploda para Infinito quando a distância entre sigmas for zero
+            distancia_predita = torch.sqrt(delta_ao_quadrado + self.eps) # [Batch, Batch]
 
-        ## 3. SOMA COMPOSTA
-        loss_total = l_ce + (self.lambda_tax * l_tax)
+            # Cria uma máscara para ignorar a diagonal principal (comparação da imagem com ela mesma)
+            mascara = ~torch.eye(sigmas.size(0), dtype=torch.bool, device=sigmas.device)
 
-        return loss_total, l_ce, l_tax
+            # Calcula o erro quadrático médio apenas nos pares válidos da matriz
+            erro_distancia = (distancia_predita - distancia_alvo) ** 2
+            l_tax = torch.mean(erro_distancia[mascara])
+
+            ## 3. SOMA COMPOSTA
+            loss_total = l_ce + (self.lambda_tax * l_tax)
+
+            return loss_total, l_ce, l_tax
 
 # class HierarchicalTaxonomicLoss(nn.Module):
 #     def __init__(self, lambda_tax: float = 0.2, k: int = 6, eps: float = 1e-7):

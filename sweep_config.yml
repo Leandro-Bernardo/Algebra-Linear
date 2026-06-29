@@ -1,6 +1,8 @@
-program: models_sweep.py
+program: 4-sweep.py
+project: Linear-Algebra
+sweep_id:
 method: bayes
-name: "Embeddings, vgg output 7x7, sem mlp contextual"
+name: ""
 metric:
   name: Loss/Val
   goal: minimize
@@ -13,5 +15,5 @@ parameters:
   batch_size:
     values: [8, 16, 32, 64, 128]
   lambda_tax:
-    min: 0.05
+    min: 0.1
     max: 0.5

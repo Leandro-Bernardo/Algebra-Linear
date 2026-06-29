@@ -1,16 +1,15 @@
-
-*.arrow
-LinAlg
-*.ipynb
-dataset
+LinAlg/
+Artigo/
+dataset/
 Final_dataset/
-
-wandb/run-20260614_143242-6yl6iw21/logs/
-
-*.log
-
-*.wandb
 checkpoints/
 wandb/
 lightning_logs/
+settings.yml
+*.log
+*.arrow
+*.ipynb
+*.wandb
+*.png
+*__pycache__
 

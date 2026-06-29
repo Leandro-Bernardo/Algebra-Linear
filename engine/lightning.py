@@ -276,8 +276,8 @@ class BaseModel(LightningModule):
     def __init__(self, *, num_classes: int, num_total_nos_globais: int, embedding_dim: int = 49, learning_rate: float = 1e-3, learning_rate_patience: int = 5, early_stopping_patience: int = 10, lambda_tax: float = 0.1, **kwargs: Any):
         super().__init__()
         self.save_hyperparameters()
-        self.net = Model(num_classes_especie=num_classes, num_total_nos_globais=num_total_nos_globais, embedding_dim=embedding_dim)
-        self.criterion = HierarchicalTaxonomicLoss(lambda_tax=lambda_tax, k=6)
+        self.net = Model(num_classes_especie=num_classes, num_total_nos_globais=num_total_nos_globais, embedding_dim=embedding_dim, use_taxonomic_embedding=False)
+        self.criterion = HierarchicalTaxonomicLoss(lambda_tax=lambda_tax, k=6, use_taxonomic_loss=False)
         self.learning_rate = learning_rate
         self.learning_rate_patience = learning_rate_patience
         self.early_stopping_patience = early_stopping_patience
@@ -330,14 +330,13 @@ class BaseModel(LightningModule):
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx):
         images, ids_taxonomicos, y_classe = batch
-        logits, _, _ = self(images, ids_taxonomicos)
+        logits, _, _ = self(images, ids_taxonomicos=None) #logits, _, _ = self(images, ids_taxonomicos)
         preds = torch.argmax(logits, dim=1)
 
         metrics: MetricCollection = self.metrics["Test"]
         metrics(logits, y_classe)
 
         # Captura os dados para a matriz de confusão final
-        # Adicionado loop interno caso o batch_size seja maior que 1 amostragem pura no teste
         for p, t in zip(preds.detach().cpu().numpy(), y_classe.detach().cpu().numpy()):
             self._inference_time["predictions"].append(p)
             self._inference_time["targets"].append(t)
@@ -364,15 +363,38 @@ class BaseModel(LightningModule):
         targets = np.array(self._inference_time["targets"])
 
         cm = confusion_matrix(targets, preds)
-        fig, ax = plt.subplots(figsize=(8, 6))
+
+        # CORREÇÃO 1: Aumentamos o figsize para 20x18. Isso dá espaço real para as 48 classes respirarem.
+        fig, ax = plt.subplots(figsize=(20, 18))
+
         disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-        disp.plot(ax=ax, colorbar=True, cmap="Blues")
-        ax.set_title("Confusion Matrix — Best Model (Test Set)")
+
+        # CORREÇÃO 2:
+        # - values_format="d" garante que números inteiros não virem notação científica (ex: 1e+02).
+        # - text_kw={"fontsize": 6} reduz drasticamente o tamanho do texto interno de cada quadrado.
+        # NOTA: Se mesmo com tamanho 6 ficar poluído, você pode passar include_values=False para esconder os números e avaliar puramente pela cor.
+        disp.plot(
+            ax=ax,
+            colorbar=True,
+            cmap="Blues",
+            values_format="d",
+            text_kw={"fontsize": 6},
+            include_values=True
+        )
+
+        # CORREÇÃO 3: Ajusta os eixos para que as 48 labels fiquem legíveis e sem sobreposição
+        ax.set_title("Confusion Matrix — Best Model (Test Set)", fontsize=16, pad=20)
+        ax.tick_params(axis='both', which='major', labelsize=8)
+        plt.xticks(rotation=45) # Rotaciona os números do eixo X para não colidirem
+
         plt.tight_layout()
 
+        # Envia para o Weights & Biases com alta qualidade
         if isinstance(self.logger.experiment, wandb.sdk.wandb_run.Run):
             self.logger.experiment.log({"confusion_matrix/Test/BestModel": wandb.Image(fig)})
 
-        plt.savefig("confusion_matrix_best_model.png", dpi=150)
+        # CORREÇÃO 4: Aumentamos o DPI para 300 para salvar o arquivo local em altíssima resolução (HD)
+        plt.savefig("confusion_matrix_best_model.png", dpi=300, bbox_inches='tight')
         plt.close(fig)
+
         self._inference_time = {"predictions": [], "targets": []}
